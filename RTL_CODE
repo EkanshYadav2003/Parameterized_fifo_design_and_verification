@@ -1,1 +1,69 @@
+`timescale 1ns / 1ps
+
+module sync_fifo #(
+    parameter DATA_WIDTH = 8,
+    parameter DEPTH = 16,
+    // Note: To use the MSB trick efficiently, we calculate the pointer width automatically.
+    // $clog2(16) = 4 bits for address. We add 1 for the MSB, making the internal pointer 5 bits wide.
+    parameter PTR_WIDTH = $clog2(DEPTH) 
+)(
+    input  wire                   clk,
+    input  wire                   rst, // Active high, synchronous reset
+    input  wire                   wr_en,
+    input  wire                   rd_en,
+    input  wire [DATA_WIDTH-1:0]  wdata,
+    output reg  [DATA_WIDTH-1:0]  rdata,
+    output wire                   full,
+    output wire                   empty,
+    output wire                   almost_full,
+    output wire                   almost_empty
+);
+
+    // 1. The Memory Array (BRAM/Registers)
+    reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
+
+    // 2. The Pointers (Width is PTR_WIDTH + 1 to include MSB)
+    reg [PTR_WIDTH:0] wr_ptr;
+    reg [PTR_WIDTH:0] rd_ptr;
+
+    // 3. Write Logic
+    always @(posedge clk) begin
+        if (rst) begin
+            wr_ptr <= 0;
+        end else if (wr_en && !full) begin
+            mem[wr_ptr[PTR_WIDTH-1:0]] <= wdata; // Only use lower bits for memory address
+            wr_ptr <= wr_ptr + 1;                // Wraps automatically!
+        end
+    end
+
+    // 4. Read Logic
+    always @(posedge clk) begin
+        if (rst) begin
+            rd_ptr <= 0;
+            rdata  <= 0;
+        end else if (rd_en && !empty) begin
+            rdata <= mem[rd_ptr[PTR_WIDTH-1:0]];
+            rd_ptr <= rd_ptr + 1;
+        end
+    end
+
+    // 5. Flag Logic: The Secret Sauce
+    // Empty: Every single bit is identical.
+    assign empty = (wr_ptr == rd_ptr);
+    
+    // Full: MSB is different, but all lower address bits are identical.
+    assign full = (wr_ptr[PTR_WIDTH] != rd_ptr[PTR_WIDTH]) && 
+                  (wr_ptr[PTR_WIDTH-1:0] == rd_ptr[PTR_WIDTH-1:0]);
+
+    // 6. Bonus: Occupancy & Almost Flags 
+    // How many items are currently in the FIFO?
+    wire [PTR_WIDTH:0] fifo_count = wr_ptr - rd_ptr;
+    
+    // Let's set almost empty at 2 items, almost full at DEPTH-2.
+    // In a real design, these thresholds would also be parameters!
+    assign almost_empty = (fifo_count <= 2);
+    assign almost_full  = (fifo_count >= (DEPTH - 2));
+
+endmodule
+
 
