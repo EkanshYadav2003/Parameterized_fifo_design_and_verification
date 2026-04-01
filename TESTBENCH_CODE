@@ -1,1 +1,133 @@
+`timescale 1ns / 1ps
+
+module tb_sync_fifo;
+
+    parameter DATA_WIDTH = 8;
+    parameter DEPTH = 16;
+    
+    reg clk;
+    reg rst;
+    reg wr_en;
+    reg rd_en;
+    reg [DATA_WIDTH-1:0] wdata;
+
+    wire [DATA_WIDTH-1:0] rdata;
+    wire full;
+    wire empty;
+    wire almost_full;
+    wire almost_empty;
+
+    // 1. Instantiate the Unit Under Test (UUT)
+    sync_fifo #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .DEPTH(DEPTH)
+    ) uut (
+        .clk(clk),
+        .rst(rst),
+        .wr_en(wr_en),
+        .rd_en(rd_en),
+        .wdata(wdata),
+        .rdata(rdata),
+        .full(full),
+        .empty(empty),
+        .almost_full(almost_full),
+        .almost_empty(almost_empty)
+    );
+
+    // 2. Clock Generation (10ns period)
+    always #5 clk = ~clk;
+
+    // 3. The Scoreboard 
+    reg [DATA_WIDTH-1:0] scoreboard_queue [$]; 
+    reg [DATA_WIDTH-1:0] expected_data;
+    reg read_accepted;
+    reg write_accepted;
+
+    // 4. Verification Logic
+    initial begin
+        clk = 0; rst = 1; wr_en = 0; rd_en = 0; wdata = 0;
+
+        #20 rst = 0; #20;
+        $display("--- Starting Verification! ---");
+
+        // === TEST 1: Basic Write until Full ===
+        $display("Test 1: Writing until FULL...");
+        while (!full) begin
+            @(negedge clk);
+            // BUGFIX: We must double-check the flag AFTER waking up!
+            if (!full) begin 
+                wr_en = 1;
+                wdata = $random;
+                scoreboard_queue.push_back(wdata);
+            end
+        end
+        @(negedge clk);
+        wr_en = 0; 
+        if (full) $display("-> PASS: FULL flag asserted correctly.");
+
+        // === TEST 2: Basic Read until Empty ===
+        $display("Test 2: Reading until EMPTY and verifying data...");
+        while (!empty) begin
+            @(negedge clk);
+            if (!empty) begin // BUGFIX
+                rd_en = 1;
+                expected_data = scoreboard_queue.pop_front();
+                @(posedge clk); 
+                #1; 
+                if (rdata !== expected_data) begin
+                    $display("ERROR! Scoreboard Mismatch: Expected %0h, Got %0h", expected_data, rdata);
+                    $finish;
+                end
+            end
+        end
+        @(negedge clk);
+        rd_en = 0; 
+        if (empty) $display("-> PASS: EMPTY flag asserted and all data matched perfectly.");
+        
+        // === TEST 3: Randomized Stress Test ===
+        $display("Test 3: Randomized Stress Test (Simultaneous Reads/Writes)...");
+        repeat (100) begin
+            @(negedge clk);
+            
+            if ($urandom_range(0, 10) >3 ) begin
+                wr_en = 1;
+                wdata = $random;
+           
+            end else begin
+                wr_en = 0;
+            end
+
+            if ($urandom_range(0, 10) > 5) begin
+                rd_en = 1;
+                
+            end else begin
+                rd_en = 0;
+            end
+            
+            // Model DUT's accepted transactions for this cycle.
+            read_accepted  = rd_en && !empty;
+            write_accepted = wr_en && (!full || read_accepted);
+            
+            if (write_accepted) begin
+                scoreboard_queue.push_back(wdata);
+            end
+            @(posedge clk);
+            #1;
+            if(read_accepted)begin
+                expected_data = scoreboard_queue.pop_front();
+                if (rdata !== expected_data) begin
+                    $display("ERROR in Stress Test! Expected %0h, Got %0h", expected_data, rdata);
+                    $finish;
+                end
+            end
+        end
+        
+        @(negedge clk);
+        wr_en = 0; rd_en = 0;
+        $display("========================================");
+        $display("||   ALL TESTS PASSED SUCCESSFULLY!   ||");
+        $display("========================================");
+        $finish; 
+    end
+endmodule
 
